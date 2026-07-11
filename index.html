@@ -1,4 +1,4 @@
-<.html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1827,6 +1827,24 @@
     return String(key).replace(/[.#$\[\]\/]/g, '_');
   }
 
+  // Real-time push updates for shared (room) data — separate from the
+  // get/set/delete/list shim above, since "watch this value forever and
+  // call me the instant it changes" is a genuinely new capability that
+  // window.storage never had (it only supported one-off reads/writes,
+  // which is why the room previously had to poll on a timer instead).
+  // Personal (localStorage) data has no equivalent push mechanism and
+  // isn't expected to need one — nothing in this app subscribes to it.
+  window.subscribeToKey = function(key, shared, onChange, onError) {
+    if (!shared) {
+      console.warn('subscribeToKey: only shared (Firebase-backed) keys support real-time subscription.');
+      return () => {};
+    }
+    const ref = fbDb.ref('shared/' + fbSafeKey(key));
+    const handler = snap => onChange(snap.val());
+    ref.on('value', handler, err => { if (onError) onError(err); });
+    return () => ref.off('value', handler); // call this to unsubscribe
+  };
+
   window.storage = {
     async get(key, shared) {
       if (shared) {
@@ -2945,17 +2963,24 @@
   }
 
   // ---------- PARTY ROOM ----------
-  // Uses shared artifact storage (visible to anyone using the same room
-  // code) as a lightweight, polling-based way to sync rolls and the
-  // map/tokens across players. Not instant push, and concurrent writes can
-  // rarely clobber each other since it's simple read-modify-write, not a
-  // transaction — fine for turn-based tabletop pacing, not for anything
-  // fast-twitch. Log and board are combined into one key per room (rather
-  // than separate keys) so each poll cycle is a single storage call.
+  // Uses Firebase Realtime Database (shared, real-time-push) to sync rolls,
+  // chat, and the map/tokens across players. Board, chat, and log are
+  // stored as THREE SEPARATE keys rather than one combined blob — so
+  // sending a chat message only ever writes the chat, not the entire
+  // board (map image, every token, every wall, every scene, the whole
+  // bestiary) along with it, and a chat-only update doesn't trigger a
+  // full board re-render on everyone else's screen either. Each piece
+  // gets its own real-time listener and its own write queue, so a burst
+  // of chat messages never has to wait behind a board write, or vice
+  // versa.
 
   let currentRoom = null;
-  let roomPollTimer = null;
-  let lastSeenStateJson = null;
+  let roomUnsubscribeBoard = null; // call these to stop each listener when leaving a room
+  let roomUnsubscribeChat = null;
+  let roomUnsubscribeLog = null;
+  let lastSeenBoardJson = null;
+  let lastSeenChatJson = null;
+  let lastSeenLogJson = null;
   const ROOM_LAST_CODE_KEY = 'lastRoomCode';
   const LOCAL_BOARD_KEY = 'localBoard';
 
@@ -2978,46 +3003,52 @@
     return name || 'Adventurer';
   }
 
-  function roomStateKey(code) {
-    return 'room:' + code.trim().toUpperCase() + ':state';
-  }
+  function roomBoardKey(code) { return 'room:' + code.trim().toUpperCase() + ':board'; }
+  function roomChatKey(code) { return 'room:' + code.trim().toUpperCase() + ':chat'; }
+  function roomLogKey(code) { return 'room:' + code.trim().toUpperCase() + ':log'; }
 
-  // Reading a key that has never been written throws by design — that's
-  // normal for a brand-new, empty room, not a real failure. Without this,
-  // every poll of an untouched room would count as an error and eventually
-  // trip the "not receiving updates" warning even though nothing is wrong.
-  // Writing an empty state immediately on join means the key always exists
-  // by the time polling starts, so a real failure is the only thing left
-  // that could trip that warning afterward.
-  async function ensureRoomInitialized() {
-    const key = roomStateKey(currentRoom);
+  async function readRoomBoard() {
     try {
-      await window.storage.get(key, true);
-    } catch (err) {
-      try {
-        await window.storage.set(key, JSON.stringify({ log: [], chat: [], board: defaultBoard() }), true);
-      } catch (initErr) {
-        console.warn('Could not initialize room state:', initErr.message || initErr);
-      }
-    }
-  }
-
-  async function readRoomState() {
-    const key = roomStateKey(currentRoom);
-    try {
-      const existing = await window.storage.get(key, true);
+      const existing = await window.storage.get(roomBoardKey(currentRoom), true);
       if (existing && existing.value) return JSON.parse(existing.value);
-    } catch (err) { /* key doesn't exist yet — normal for a brand new room */ }
-    return { log: [], chat: [], board: defaultBoard() };
+    } catch (err) { /* nothing written yet — normal for a brand new room */ }
+    return defaultBoard();
+  }
+  async function readRoomChat() {
+    try {
+      const existing = await window.storage.get(roomChatKey(currentRoom), true);
+      if (existing && existing.value) return JSON.parse(existing.value);
+    } catch (err) { /* nothing written yet */ }
+    return [];
+  }
+  async function readRoomLog() {
+    try {
+      const existing = await window.storage.get(roomLogKey(currentRoom), true);
+      if (existing && existing.value) return JSON.parse(existing.value);
+    } catch (err) { /* nothing written yet */ }
+    return [];
   }
 
-  async function writeRoomState(state) {
-    const key = roomStateKey(currentRoom);
-    const json = JSON.stringify(state);
-    await window.storage.set(key, json, true);
-    lastSeenStateJson = json;
-    clearRoomSyncIssue(); // a successful write means sync is healthy again
-    return state;
+  async function writeRoomBoard(boardObj) {
+    const json = JSON.stringify(boardObj);
+    await window.storage.set(roomBoardKey(currentRoom), json, true);
+    lastSeenBoardJson = json;
+    clearRoomSyncIssue();
+    return boardObj;
+  }
+  async function writeRoomChat(chatArr) {
+    const json = JSON.stringify(chatArr);
+    await window.storage.set(roomChatKey(currentRoom), json, true);
+    lastSeenChatJson = json;
+    clearRoomSyncIssue();
+    return chatArr;
+  }
+  async function writeRoomLog(logArr) {
+    const json = JSON.stringify(logArr);
+    await window.storage.set(roomLogKey(currentRoom), json, true);
+    lastSeenLogJson = json;
+    clearRoomSyncIssue();
+    return logArr;
   }
 
   // Surfaces sync problems in the room note instead of only logging to the
@@ -3034,34 +3065,32 @@
     }
   }
 
-  // pushRollToRoom, pushChatMessage, and pushBoardToRoom each do their own
-  // read-then-write. Called back-to-back (e.g. sending a chat message right
-  // before dragging a token), the second call could read stale data from
-  // before the first one's write landed, then overwrite it — silently
-  // dropping whichever change happened first. Routing every mutation
-  // through this queue guarantees only one read-modify-write is ever in
-  // flight at a time, so each one always reads the result of the last.
-  let roomWriteQueue = Promise.resolve();
-  function queueRoomWrite(mutateFn) {
-    roomWriteQueue = roomWriteQueue.then(mutateFn, mutateFn); // run even if the previous one errored
-    return roomWriteQueue;
-  }
+  // Independent write queues for board/chat/log — each guarantees only one
+  // read-modify-write for THAT piece is ever in flight at a time (so two
+  // rapid chat messages can't clobber each other), without making a burst
+  // of chat activity wait behind a board write or vice versa, since they
+  // no longer share any data or any queue.
+  let boardWriteQueue = Promise.resolve();
+  let chatWriteQueue = Promise.resolve();
+  let logWriteQueue = Promise.resolve();
+  function queueBoardWrite(fn) { boardWriteQueue = boardWriteQueue.then(fn, fn); return boardWriteQueue; }
+  function queueChatWrite(fn) { chatWriteQueue = chatWriteQueue.then(fn, fn); return chatWriteQueue; }
+  function queueLogWrite(fn) { logWriteQueue = logWriteQueue.then(fn, fn); return logWriteQueue; }
 
   async function pushRollToRoom(entry) {
-    return queueRoomWrite(async () => {
+    return queueLogWrite(async () => {
       try {
-        const state = await readRoomState();
-        state.log = state.log || [];
-        state.log.unshift({
+        let log = await readRoomLog();
+        log.unshift({
           player: currentPlayerName(),
           breakdownText: entry.breakdownText,
           total: entry.total,
           colorClass: entry.colorClass,
           ts: Date.now()
         });
-        if (state.log.length > 30) state.log = state.log.slice(0, 30);
-        await writeRoomState(state);
-        renderPartyLog(state.log);
+        if (log.length > 30) log = log.slice(0, 30);
+        await writeRoomLog(log);
+        renderPartyLog(log);
       } catch (err) {
         console.warn('Could not sync roll to room:', err.message || err);
         reportRoomSyncIssue('That roll couldn\'t sync to the room — try leaving and rejoining if this keeps happening.');
@@ -3070,18 +3099,17 @@
   }
 
   async function pushChatMessage(text) {
-    return queueRoomWrite(async () => {
+    return queueChatWrite(async () => {
       try {
-        const state = await readRoomState();
-        state.chat = state.chat || [];
-        state.chat.push({
+        let chat = await readRoomChat();
+        chat.push({
           player: currentPlayerName(),
           text,
           ts: Date.now()
         });
-        if (state.chat.length > 100) state.chat = state.chat.slice(-100);
-        await writeRoomState(state);
-        renderChat(state.chat);
+        if (chat.length > 100) chat = chat.slice(-100);
+        await writeRoomChat(chat);
+        renderChat(chat);
       } catch (err) {
         console.warn('Could not send chat message:', err.message || err);
         reportRoomSyncIssue('That message couldn\'t sync to the room — try leaving and rejoining if this keeps happening.');
@@ -3090,11 +3118,11 @@
   }
 
   async function pushBoardToRoom(boardPatch) {
-    return queueRoomWrite(async () => {
+    return queueBoardWrite(async () => {
       try {
-        const state = await readRoomState();
-        state.board = Object.assign({}, state.board || defaultBoard(), boardPatch);
-        await writeRoomState(state);
+        const current = await readRoomBoard();
+        const merged = Object.assign({}, current, boardPatch);
+        await writeRoomBoard(merged);
       } catch (err) {
         console.warn('Could not sync board to room:', err.message || err);
         reportRoomSyncIssue('The map couldn\'t sync to the room — try leaving and rejoining if this keeps happening.');
@@ -3102,30 +3130,41 @@
     });
   }
 
-  let roomPollFailureCount = 0;
-  async function pollRoom() {
+  // Each of these fires only when ITS OWN piece changes — a chat message
+  // no longer triggers a full board re-render (redrawing walls/fog/
+  // tokens/tracker/scenes/DM reference) on everyone else's screen, and a
+  // board change no longer touches chat or the roll log at all.
+  function handleBoardUpdate(raw) {
     if (!currentRoom) return;
+    clearRoomSyncIssue();
+    if (!raw || raw === lastSeenBoardJson) return;
+    lastSeenBoardJson = raw;
     try {
-      const key = roomStateKey(currentRoom);
-      const result = await window.storage.get(key, true);
-      const raw = result && result.value ? result.value : null;
-      roomPollFailureCount = 0;
-      clearRoomSyncIssue();
-      if (raw && raw !== lastSeenStateJson) {
-        lastSeenStateJson = raw;
-        const state = JSON.parse(raw);
-        renderPartyLog(state.log || []);
-        renderChat(state.chat || []);
-        if (!isDraggingToken) applyBoardState(state.board || defaultBoard());
-      }
+      if (!isDraggingToken) applyBoardState(JSON.parse(raw) || defaultBoard());
     } catch (err) {
-      // The very first poll or two after creating a brand new room will
-      // fail because the key doesn't exist yet — that's normal, not an
-      // error. Only surface a warning after several polls keep failing.
-      roomPollFailureCount++;
-      if (roomPollFailureCount >= 4) {
-        reportRoomSyncIssue('Not receiving updates from the room — try leaving and rejoining.');
-      }
+      console.warn('Could not parse room board update:', err.message || err);
+    }
+  }
+  function handleChatUpdate(raw) {
+    if (!currentRoom) return;
+    clearRoomSyncIssue();
+    if (!raw || raw === lastSeenChatJson) return;
+    lastSeenChatJson = raw;
+    try {
+      renderChat(JSON.parse(raw) || []);
+    } catch (err) {
+      console.warn('Could not parse room chat update:', err.message || err);
+    }
+  }
+  function handleLogUpdate(raw) {
+    if (!currentRoom) return;
+    clearRoomSyncIssue();
+    if (!raw || raw === lastSeenLogJson) return;
+    lastSeenLogJson = raw;
+    try {
+      renderPartyLog(JSON.parse(raw) || []);
+    } catch (err) {
+      console.warn('Could not parse room log update:', err.message || err);
     }
   }
 
@@ -3194,27 +3233,40 @@
     roomNoteEl.textContent = 'Anyone with this room code can see rolls and the map here — treat it like a shared party password, not a secret.';
     partyLogPanel.style.display = 'block';
     chatPanel.style.display = 'block';
-    lastSeenStateJson = null;
+    lastSeenBoardJson = null;
+    lastSeenChatJson = null;
+    lastSeenLogJson = null;
+
     (async () => {
-      await ensureRoomInitialized();
-      const state = await readRoomState();
-      renderPartyLog(state.log || []);
-      renderChat(state.chat || []);
-      applyBoardState(state.board || defaultBoard());
+      const [boardObj, chat, log] = await Promise.all([readRoomBoard(), readRoomChat(), readRoomLog()]);
+      renderPartyLog(log);
+      renderChat(chat);
+      applyBoardState(boardObj);
       // If we already had a local board going solo, push it into the room once
-      if (board.imageDataUrl && !state.board.imageDataUrl) {
+      if (board.imageDataUrl && !boardObj.imageDataUrl) {
         await pushBoardToRoom(board);
       }
-      roomPollFailureCount = 0; // start the failure counter fresh now that the key is guaranteed to exist
     })();
-    roomPollTimer = setInterval(pollRoom, 3000);
+
+    roomUnsubscribeBoard = window.subscribeToKey(roomBoardKey(code), true, handleBoardUpdate, err => {
+      console.warn('Room board sync error:', err);
+      reportRoomSyncIssue('Not receiving updates from the room — try leaving and rejoining.');
+    });
+    roomUnsubscribeChat = window.subscribeToKey(roomChatKey(code), true, handleChatUpdate, err => {
+      console.warn('Room chat sync error:', err);
+    });
+    roomUnsubscribeLog = window.subscribeToKey(roomLogKey(code), true, handleLogUpdate, err => {
+      console.warn('Room log sync error:', err);
+    });
+
     window.storage.set(ROOM_LAST_CODE_KEY, code, false).catch(() => {});
   }
 
   function leaveRoom() {
     currentRoom = null;
-    clearInterval(roomPollTimer);
-    roomPollTimer = null;
+    if (roomUnsubscribeBoard) { roomUnsubscribeBoard(); roomUnsubscribeBoard = null; }
+    if (roomUnsubscribeChat) { roomUnsubscribeChat(); roomUnsubscribeChat = null; }
+    if (roomUnsubscribeLog) { roomUnsubscribeLog(); roomUnsubscribeLog = null; }
     roomJoinRow.style.display = 'flex';
     roomActiveRow.style.display = 'none';
     partyLogPanel.style.display = 'none';
