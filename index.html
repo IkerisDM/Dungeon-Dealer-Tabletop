@@ -319,7 +319,14 @@
     display: flex;
     gap: 12px;
     margin-bottom: 20px;
+    align-items: flex-start;
+  }
+  .sheet-header-fields {
+    display: flex;
+    gap: 12px;
     flex-wrap: wrap;
+    flex: 1;
+    min-width: 0;
   }
   .sheet-header input {
     background: var(--ink);
@@ -331,6 +338,53 @@
   }
   .sheet-header input:focus { outline: none; border-color: var(--gold); }
   #charName { flex: 1; min-width: 140px; font-size: 1rem; }
+
+  .portrait-upload {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    border: 2px solid var(--gold);
+    background: var(--ink);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    overflow: hidden;
+  }
+  .portrait-upload:hover { box-shadow: 0 0 10px rgba(201,168,76,0.35); }
+  .portrait-upload img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .portrait-placeholder {
+    font-size: 0.6rem;
+    color: var(--bone-dim);
+    text-align: center;
+    line-height: 1.2;
+    padding: 0 4px;
+  }
+  .portrait-remove-btn {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--blood);
+    color: var(--bone);
+    border: 1px solid var(--ink);
+    font-size: 0.7rem;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
   .save-status {
     font-size: 0.7rem;
     color: var(--bone-dim);
@@ -369,6 +423,13 @@
     border-color: var(--ember);
     color: var(--ember);
     box-shadow: 0 0 8px rgba(212,130,63,0.3);
+  }
+  .zoom-level {
+    font-family: 'Courier New', monospace;
+    font-size: 0.78rem;
+    color: var(--gold);
+    min-width: 42px;
+    text-align: center;
   }
 
   /* Sheet tabs */
@@ -991,6 +1052,8 @@
     pointer-events: none;
   }
   .map-stage.wall-mode, .map-stage.door-mode { cursor: crosshair; }
+  .map-stage.pan-mode { cursor: grab; }
+  .map-stage.pan-mode:active { cursor: grabbing; }
 
   /* Turn tracker */
   .tracker-wrap {
@@ -1242,11 +1305,19 @@
     background: var(--ink-raised);
     border: 1px solid var(--line);
     border-radius: 6px;
-    overflow: hidden;
+    overflow: hidden; /* clips content to the visible frame — this element itself never scrolls */
     touch-action: none;
+  }
+  .map-scroll-area {
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
+    overflow: auto; /* THIS is what actually scrolls when zoomed — kept separate from .map-container so the onboard controls (a sibling, not a child of this) never scroll along with the map */
+  }
+  .map-inner {
+    position: relative; /* the shared positioning context for both the <img> and #mapStage — since both live inside this single, ordinary flex-item child of the scrolling area, they're guaranteed to move together pixel-for-pixel when scrolled/panned, with no ambiguity about crossing a scroll boundary */
   }
   .map-wrap.fullscreen {
     position: fixed;
@@ -1280,6 +1351,65 @@
     border: 1px solid var(--line);
   }
   .map-wrap.fullscreen .fullscreen-corner-controls { display: flex; }
+
+  /* A small, focused set of controls that live directly on the map
+     itself — always visible in both normal and fullscreen mode, unlike
+     the full toolbar above, which can be hidden. Deliberately kept to
+     just the handful of things you'd reach for while actually looking at
+     the map: zoom, fullscreen, grid, fog, and uploading a new image. */
+  .map-onboard-controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    background: rgba(20,17,15,0.82);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px;
+  }
+  .map-onboard-btn {
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(232,223,206,0.04);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    color: var(--bone-dim);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .map-onboard-btn:hover { border-color: var(--gold); color: var(--gold); box-shadow: 0 0 6px rgba(201,168,76,0.25); }
+  .map-onboard-zoom {
+    font-family: 'Courier New', monospace;
+    font-size: 0.62rem;
+    color: var(--gold);
+    text-align: center;
+  }
+  .map-onboard-divider {
+    width: 20px;
+    height: 1px;
+    background: var(--line);
+    margin: 2px 0;
+  }
+  .map-onboard-number {
+    width: 34px;
+    background: var(--ink);
+    border: 1px solid var(--line);
+    color: var(--bone);
+    font-family: inherit;
+    font-size: 0.7rem;
+    text-align: center;
+    padding: 4px 0;
+    border-radius: 4px;
+  }
   .map-empty {
     position: absolute;
     inset: 0;
@@ -1461,11 +1591,19 @@
         <button type="button" id="sheetFloatCloseBtn">×</button>
       </div>
       <div class="sheet-header">
-        <input type="text" id="charName" placeholder="Character name">
-        <input type="text" id="charClass" placeholder="Class">
-        <div class="level-field">
-          <label for="charLevel">Lvl</label>
-          <input type="number" id="charLevel" value="1" min="1" max="20">
+        <div class="portrait-upload" id="charPortraitUpload" title="Click to upload a portrait">
+          <img id="charPortraitImg" style="display:none;" alt="Character portrait">
+          <span class="portrait-placeholder" id="charPortraitPlaceholder">+ Portrait</span>
+          <button type="button" class="portrait-remove-btn" id="charPortraitRemoveBtn" style="display:none;" title="Remove portrait">×</button>
+        </div>
+        <input type="file" id="charPortraitFile" accept="image/*" style="display:none;">
+        <div class="sheet-header-fields">
+          <input type="text" id="charName" placeholder="Character name">
+          <input type="text" id="charClass" placeholder="Class">
+          <div class="level-field">
+            <label for="charLevel">Lvl</label>
+            <input type="number" id="charLevel" value="1" min="1" max="20">
+          </div>
         </div>
       </div>
       <div class="save-status" id="saveStatus">&nbsp;</div>
@@ -1741,18 +1879,6 @@
         <input type="file" id="importBoardFile" accept="application/json" style="display:none;">
       </div>
       <div class="toolbar-row">
-        <span class="toolbar-section-label">Map</span>
-        <button class="io-btn dm-only" id="mapUploadBtn">Upload Map</button>
-        <input type="file" id="mapFileInput" accept="image/*" style="display:none;">
-        <button class="io-btn dm-only" id="gridToggleBtn">Grid: On</button>
-        <div class="grid-size-control dm-only">
-          <label for="gridSizeInput">Grid px</label>
-          <input type="number" id="gridSizeInput" value="40" min="10" max="200">
-        </div>
-        <div class="toolbar-spacer"></div>
-        <button class="io-btn" id="expandMapBtn">Fullscreen</button>
-      </div>
-      <div class="toolbar-row">
         <span class="toolbar-section-label">Token</span>
         <button class="io-btn dm-only" id="addTokenBtn">+ Add Token</button>
         <button class="io-btn player-only" id="claimTokenBtn" disabled>Claim Token</button>
@@ -1778,6 +1904,9 @@
           <label for="tokenSpeedInput">Speed (ft)</label>
           <input type="number" id="tokenSpeedInput" value="30" min="0" max="500" step="5" disabled>
         </div>
+        <button class="io-btn" id="tokenPortraitBtn" disabled>Set Portrait</button>
+        <button class="io-btn" id="tokenPortraitClearBtn" disabled>Clear Portrait</button>
+        <input type="file" id="tokenPortraitFile" accept="image/*" style="display:none;">
         <button class="io-btn dm-only" id="removeTokenBtn" disabled>Remove Selected</button>
       </div>
       <div class="toolbar-row">
@@ -1812,6 +1941,8 @@
         <button class="io-btn dm-only" id="addDoorBtn">Add Doors: Off</button>
         <button class="io-btn dm-only" id="clearWallsBtn">Clear Walls</button>
         <button class="io-btn" id="rulerBtn">Ruler: Off</button>
+        <button class="io-btn" id="panModeBtn">Pan: Off</button>
+        <button class="io-btn" id="resetViewBtn">Reset View</button>
         <span class="fog-hint" id="wallModeHint"></span>
       </div>
       <div class="toolbar-row">
@@ -1834,13 +1965,8 @@
         <button class="io-btn" id="clearTemplatesBtn">Clear Templates</button>
         <span class="fog-hint" id="templateModeHint"></span>
       </div>
-      <div class="toolbar-row dm-only">
-        <span class="toolbar-section-label">Fog</span>
-        <button class="io-btn" id="fogToggleBtn">Fog: Off</button>
-        <button class="io-btn" id="resetFogBtn">Reset Fog</button>
-      </div>
     </div>
-    <p class="fog-hint" style="max-width:900px;margin:-4px 0 8px;">When Fog is on, moving a Player token into an area permanently reveals it, blocked by any walls and closed doors in the way. Monster/NPC tokens never reveal fog.</p>
+    <p class="fog-hint" style="max-width:900px;margin:-4px 0 8px;">When Fog is on, moving a Player token into an area permanently reveals it, blocked by any walls and closed doors in the way. Monster/NPC tokens never reveal fog. Middle-click-drag pans the map at any time, in any mode.</p>
     <div class="fullscreen-corner-controls" id="fullscreenCornerControls">
       <button class="io-btn" id="floatSheetBtn">Character Sheet</button>
       <button class="io-btn" id="floatDiceBtn">Dice Roller</button>
@@ -1849,11 +1975,31 @@
     </div>
     <div class="map-container" id="mapContainer">
       <div class="map-empty" id="mapEmpty">Upload a map image to get started. Click + Add Token to place a token, drag to move it, double-click to rename.</div>
-      <img id="mapImageEl" alt="" draggable="false">
-      <div class="map-stage" id="mapStage">
-        <div class="grid-overlay" id="gridOverlay"></div>
-        <canvas class="walls-canvas" id="wallsCanvas"></canvas>
-        <canvas class="fog-canvas" id="fogCanvas"></canvas>
+      <div class="map-scroll-area" id="mapScrollArea">
+        <div class="map-inner" id="mapInner">
+          <img id="mapImageEl" alt="" draggable="false">
+          <div class="map-stage" id="mapStage">
+            <div class="grid-overlay" id="gridOverlay"></div>
+            <canvas class="walls-canvas" id="wallsCanvas"></canvas>
+            <canvas class="fog-canvas" id="fogCanvas"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="map-onboard-controls" id="mapOnboardControls">
+        <button class="map-onboard-btn" id="zoomInBtn" title="Zoom in">+</button>
+        <button class="map-onboard-btn" id="zoomOutBtn" title="Zoom out">−</button>
+        <span class="map-onboard-zoom" id="zoomLevelDisplay">100%</span>
+        <div class="map-onboard-divider"></div>
+        <button class="map-onboard-btn" id="expandMapBtn" title="Fullscreen">⛶</button>
+        <div class="map-onboard-divider"></div>
+        <button class="map-onboard-btn dm-only" id="gridToggleBtn" title="Toggle grid">#</button>
+        <input type="number" id="gridSizeInput" class="map-onboard-number" value="40" min="10" max="200" title="Grid size (px)">
+        <div class="map-onboard-divider"></div>
+        <button class="map-onboard-btn" id="fogToggleBtn" title="Toggle fog of war">◑</button>
+        <button class="map-onboard-btn dm-only" id="resetFogBtn" title="Reset fog">↺</button>
+        <div class="map-onboard-divider"></div>
+        <button class="map-onboard-btn dm-only" id="mapUploadBtn" title="Upload map image">⬆</button>
+        <input type="file" id="mapFileInput" accept="image/*" style="display:none;">
       </div>
     </div>
     <p class="ddb-note" id="mapNote">Map, tokens, walls, and fog sync automatically while you're in a Room above — everyone in the room sees the same board. Player vision is blocked by walls and closed doors (real line-of-sight via ray casting). Dragging a token also stops at walls and closed doors — hold Shift while dragging to move through them anyway (handy for setup).</p>
@@ -2198,6 +2344,73 @@
     return String(str || '').replace(/"/g, '&quot;');
   }
 
+  // Shared client-side resize/compress, same technique already used for
+  // map uploads — keeps portrait images small enough to sync quickly and
+  // stay well under storage limits, since a token or character sheet
+  // portrait only ever needs to render at a small size anyway.
+  function compressImageFile(file, maxWidth, quality) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const reader = new FileReader();
+      reader.onload = () => { img.src = reader.result; };
+      reader.onerror = () => reject(new Error('Could not read that file.'));
+      img.onload = () => {
+        const scale = Math.min(1, maxWidth / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = () => reject(new Error('Could not load that image.'));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // ---------- CHARACTER PORTRAIT ----------
+  let charPortraitDataUrl = null;
+  const charPortraitUpload = document.getElementById('charPortraitUpload');
+  const charPortraitImg = document.getElementById('charPortraitImg');
+  const charPortraitPlaceholder = document.getElementById('charPortraitPlaceholder');
+  const charPortraitRemoveBtn = document.getElementById('charPortraitRemoveBtn');
+  const charPortraitFile = document.getElementById('charPortraitFile');
+
+  function setCharPortrait(dataUrl) {
+    charPortraitDataUrl = dataUrl || null;
+    if (charPortraitDataUrl) {
+      charPortraitImg.src = charPortraitDataUrl;
+      charPortraitImg.style.display = 'block';
+      charPortraitPlaceholder.style.display = 'none';
+      charPortraitRemoveBtn.style.display = 'flex';
+    } else {
+      charPortraitImg.style.display = 'none';
+      charPortraitPlaceholder.style.display = 'block';
+      charPortraitRemoveBtn.style.display = 'none';
+    }
+  }
+
+  charPortraitUpload.addEventListener('click', e => {
+    if (e.target.closest('.portrait-remove-btn')) return; // the × has its own handler below
+    charPortraitFile.click();
+  });
+  charPortraitFile.addEventListener('change', async () => {
+    const file = charPortraitFile.files[0];
+    if (!file) return;
+    try {
+      const dataUrl = await compressImageFile(file, 300, 0.82); // small — this only ever renders at 64px on the sheet
+      setCharPortrait(dataUrl);
+      queueSave();
+    } catch (err) {
+      window.alert("Couldn't load that image: " + (err.message || err));
+    }
+    charPortraitFile.value = '';
+  });
+  charPortraitRemoveBtn.addEventListener('click', e => {
+    e.stopPropagation(); // don't also trigger the upload click on the parent
+    setCharPortrait(null);
+    queueSave();
+  });
+
   function updateWeightTotal() {
     const total = inventory.reduce((sum, item) => sum + (item.qty * item.weight), 0);
     weightTotalEl.textContent = `${total.toFixed(1)} lb.`;
@@ -2521,6 +2734,7 @@
       hpCurrent: document.getElementById('hpCurrent').value,
       hpMax: document.getElementById('hpMax').value,
       hpTemp: document.getElementById('hpTemp').value,
+      portraitDataUrl: charPortraitDataUrl,
       scores: {},
       saveProf: {},
       skillProf: {},
@@ -2562,6 +2776,7 @@
     document.getElementById('hpCurrent').value = data.hpCurrent ?? 10;
     document.getElementById('hpMax').value = data.hpMax ?? 10;
     document.getElementById('hpTemp').value = data.hpTemp ?? 0;
+    setCharPortrait(data.portraitDataUrl || null);
 
     abilities.forEach(a => {
       if (data.scores && data.scores[a.key] != null) {
@@ -3408,6 +3623,8 @@
   const sizeMultipliers = { Tiny: 0.5, Small: 1, Medium: 1, Large: 2, Huge: 3, Gargantuan: 4 };
 
   const mapContainer = document.getElementById('mapContainer');
+  const mapScrollArea = document.getElementById('mapScrollArea');
+  const mapInner = document.getElementById('mapInner');
   const mapEmpty = document.getElementById('mapEmpty');
   const mapImageEl = document.getElementById('mapImageEl');
   const mapStage = document.getElementById('mapStage');
@@ -3433,10 +3650,10 @@
       mapStage.style.height = mapContainer.clientHeight + 'px';
       return;
     }
-    const containerRect = mapContainer.getBoundingClientRect();
+    const innerRect = mapInner.getBoundingClientRect(); // mapStage's actual containing block (see .map-inner)
     const imgRect = mapImageEl.getBoundingClientRect();
-    mapStage.style.left = (imgRect.left - containerRect.left) + 'px';
-    mapStage.style.top = (imgRect.top - containerRect.top) + 'px';
+    mapStage.style.left = (imgRect.left - innerRect.left) + 'px';
+    mapStage.style.top = (imgRect.top - innerRect.top) + 'px';
     mapStage.style.width = imgRect.width + 'px';
     mapStage.style.height = imgRect.height + 'px';
   }
@@ -3451,10 +3668,99 @@
     redrawFog();
   };
 
+  // ---------- MAP ZOOM & PAN ----------
+  // Purely a local viewing preference, like the ruler — each person zooms
+  // and pans their own view independently, nothing here syncs to the room.
+  // Rather than a CSS transform (which would desync all the existing
+  // click-to-percentage math throughout this app, since transforms don't
+  // affect clientWidth/clientHeight the way real sizing does), zooming
+  // actually resizes the real <img> element beyond the container's
+  // bounds — the same syncStageToImage() mechanism that already keeps the
+  // stage aligned to the image size then just naturally follows along, so
+  // every existing coordinate calculation (tokens, walls, fog, templates,
+  // the ruler) keeps working completely unmodified.
+  let mapZoomPct = 100;
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomLevelDisplay = document.getElementById('zoomLevelDisplay');
+  const panModeBtn = document.getElementById('panModeBtn');
+  const resetViewBtn = document.getElementById('resetViewBtn');
+
+  function applyMapZoom() {
+    zoomLevelDisplay.textContent = mapZoomPct + '%';
+    // Clear any previous override first so the "fit" measurement below is
+    // always fresh, not compounding on top of a prior zoom level
+    mapImageEl.style.width = '';
+    mapImageEl.style.maxWidth = '';
+    mapImageEl.style.height = '';
+    mapImageEl.style.maxHeight = '';
+
+    if (mapZoomPct > 100) {
+      const fitRect = mapImageEl.getBoundingClientRect();
+      if (fitRect.width > 0) {
+        mapImageEl.style.maxWidth = 'none';
+        mapImageEl.style.maxHeight = 'none';
+        mapImageEl.style.width = (fitRect.width * (mapZoomPct / 100)) + 'px';
+        mapImageEl.style.height = 'auto';
+      }
+      mapScrollArea.style.overflow = 'auto';
+      // Centering (the default, used for the un-zoomed "fit" view) makes
+      // half of any overflowing content scroll in the negative direction
+      // — which most browsers simply refuse to scroll to at all. Switching
+      // to flex-start while zoomed keeps the image's top-left corner
+      // pinned to scroll position (0,0), so 100% of the zoomed map is
+      // actually reachable by scrolling, corner to corner.
+      mapScrollArea.style.alignItems = 'flex-start';
+      mapScrollArea.style.justifyContent = 'flex-start';
+    } else {
+      mapScrollArea.style.overflow = '';
+      mapScrollArea.style.alignItems = '';
+      mapScrollArea.style.justifyContent = '';
+    }
+
+    syncStageToImage();
+    updateGridOverlaySize();
+    renderTokens();
+    redrawWalls();
+    redrawFog();
+  }
+
+  zoomInBtn.addEventListener('click', () => {
+    mapZoomPct = Math.min(200, mapZoomPct + 25);
+    applyMapZoom();
+  });
+  zoomOutBtn.addEventListener('click', () => {
+    mapZoomPct = Math.max(100, mapZoomPct - 25);
+    applyMapZoom();
+  });
+  resetViewBtn.addEventListener('click', () => {
+    mapZoomPct = 100;
+    applyMapZoom();
+    mapScrollArea.scrollLeft = 0;
+    mapScrollArea.scrollTop = 0;
+  });
+
+  // Pan mode: dragging the map scrolls the (now-larger-than-the-viewport)
+  // zoomed content around instead of drawing walls, moving tokens'
+  // underlying map area, placing templates, etc. — since the map surface
+  // already has all of those other click-drag interactions wired to it,
+  // panning needed its own explicit mode rather than "just drag anywhere,"
+  // which would otherwise collide with everything else.
+  let panDragActive = false;
+  let panLastX = 0, panLastY = 0;
+
+  panModeBtn.addEventListener('click', () => {
+    mapMode = mapMode === 'pan' ? 'none' : 'pan';
+    updateMapModeUI();
+  });
+
   const tokenTypeSelect = document.getElementById('tokenTypeSelect');
   const tokenSizeSelect = document.getElementById('tokenSizeSelect');
   const tokenVisionInput = document.getElementById('tokenVisionInput');
   const tokenSpeedInput = document.getElementById('tokenSpeedInput');
+  const tokenPortraitBtn = document.getElementById('tokenPortraitBtn');
+  const tokenPortraitClearBtn = document.getElementById('tokenPortraitClearBtn');
+  const tokenPortraitFile = document.getElementById('tokenPortraitFile');
   const hpCurrentInput = document.getElementById('hpCurrentInput');
   const hpMaxInput = document.getElementById('hpMaxInput');
   const hpAmountInput = document.getElementById('hpAmountInput');
@@ -3590,6 +3896,9 @@
       mapContainer.style.width = '100%';
       mapContainer.style.height = '';
     } else {
+      // The toolbar (and the "when fog is on" hint) sit above the map
+      // again, not beside it, so figure out how much vertical space
+      // they're actually using and give the map whatever's left.
       let usedHeight = 0;
       Array.from(mapWrap.children).forEach(child => {
         if (child === mapContainer) return;
@@ -3712,6 +4021,10 @@
     board.currentSceneName = name;
     selectedTokenId = null; // avoid a stale selection pointing at a token from the old scene
     applyBoardState(board);
+    mapZoomPct = 100; // zoom/pan is a local view preference tied to what you were looking at — reset it for the new map
+    applyMapZoom();
+    mapScrollArea.scrollLeft = 0;
+    mapScrollArea.scrollTop = 0;
     syncBoard();
   }
 
@@ -4054,10 +4367,17 @@
       el.style.marginLeft = (-px / 2) + 'px';
       el.style.marginTop = (-px / 2) + 'px';
       el.style.fontSize = Math.max(9, Math.round(px * 0.3)) + 'px';
-      el.style.background = token.color;
       el.style.border = style.border;
       el.style.borderRadius = style.radius;
-      el.textContent = (token.name || '?').slice(0, 2).toUpperCase();
+      if (token.portraitDataUrl) {
+        el.style.backgroundImage = `url("${token.portraitDataUrl}")`;
+        el.style.backgroundSize = 'cover';
+        el.style.backgroundPosition = 'center';
+        el.textContent = '';
+      } else {
+        el.style.background = token.color;
+        el.textContent = (token.name || '?').slice(0, 2).toUpperCase();
+      }
       el.title = `${token.name} (${token.type || 'NPC'}, ${token.size || 'Medium'}) — Speed ${token.speedFt ?? 30}ft, Init ${token.initiative ?? '—'}` +
         (isLocked ? ' — locked until its turn' : '') +
         (token.hpMax != null ? ` — HP ${token.hpCurrent ?? 0}/${token.hpMax}` : '') +
@@ -4110,6 +4430,8 @@
     tokenVisionInput.value = selectedToken ? (selectedToken.visionSq || 0) : 0;
     tokenSpeedInput.disabled = !editable;
     tokenSpeedInput.value = selectedToken ? (selectedToken.speedFt ?? 30) : 30;
+    tokenPortraitBtn.disabled = !editable;
+    tokenPortraitClearBtn.disabled = !editable || !(selectedToken && selectedToken.portraitDataUrl);
 
     hpCurrentInput.disabled = !editable;
     hpMaxInput.disabled = !editable;
@@ -4361,6 +4683,36 @@
   function getSelectedToken() {
     return (board.tokens || []).find(t => t.id === selectedTokenId);
   }
+
+  tokenPortraitBtn.addEventListener('click', () => {
+    if (!getSelectedToken()) return;
+    tokenPortraitFile.click();
+  });
+  tokenPortraitFile.addEventListener('change', async () => {
+    const file = tokenPortraitFile.files[0];
+    const token = getSelectedToken();
+    if (!file || !token) { tokenPortraitFile.value = ''; return; }
+    try {
+      // A token portrait needs a bit more resolution than the character
+      // sheet's small circle, since it can render fairly large for Huge/
+      // Gargantuan tokens or when the map is zoomed in.
+      const dataUrl = await compressImageFile(file, 400, 0.82);
+      token.portraitDataUrl = dataUrl;
+      renderTokens();
+      syncBoard();
+    } catch (err) {
+      window.alert("Couldn't load that image: " + (err.message || err));
+    }
+    tokenPortraitFile.value = '';
+  });
+  tokenPortraitClearBtn.addEventListener('click', () => {
+    const token = getSelectedToken();
+    if (!token) return;
+    token.portraitDataUrl = null;
+    renderTokens();
+    syncBoard();
+  });
+
 
   hpMaxInput.addEventListener('input', () => {
     const token = getSelectedToken();
@@ -4974,6 +5326,9 @@
     } else {
       templateModeHint.textContent = '';
     }
+    panModeBtn.textContent = 'Pan: ' + (mapMode === 'pan' ? 'On' : 'Off');
+    panModeBtn.classList.toggle('active-mode', mapMode === 'pan');
+    mapStage.classList.toggle('pan-mode', mapMode === 'pan');
   }
 
   function setTemplateMode(shape) {
@@ -5029,6 +5384,17 @@
   let wallDeleteCandidate = null;
 
   mapStage.addEventListener('pointerdown', e => {
+    if (e.button === 1) {
+      // Middle mouse button pans regardless of whatever mode is active —
+      // so you can reposition the view without losing your place mid-way
+      // through drawing a wall or aiming a template.
+      e.preventDefault();
+      panDragActive = true;
+      panLastX = e.clientX;
+      panLastY = e.clientY;
+      mapStage.setPointerCapture(e.pointerId);
+      return;
+    }
     if (e.target.closest('.token')) return; // let token dragging handle its own clicks
     const rect = mapStage.getBoundingClientRect();
     const px = e.clientX - rect.left, py = e.clientY - rect.top;
@@ -5060,6 +5426,11 @@
       templateDeleteCandidate = findNearestTemplateOrigin(px, py, wallHitPx());
       templateDrawStart = { x: px, y: py };
       templateDrawPreviewEnd = { x: px, y: py };
+    } else if (mapMode === 'pan') {
+      panDragActive = true;
+      panLastX = e.clientX;
+      panLastY = e.clientY;
+      mapStage.setPointerCapture(e.pointerId); // keeps pointerup firing here even if the drag leaves the map's visible bounds
     } else {
       // Normal mode: clicking a door toggles it open/closed
       const hit = findNearestWall(px, py, wallHitPx());
@@ -5093,10 +5464,19 @@
     } else if (templateDrawStart) {
       templateDrawPreviewEnd = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       redrawWalls();
+    } else if (panDragActive) {
+      mapScrollArea.scrollLeft -= (e.clientX - panLastX);
+      mapScrollArea.scrollTop -= (e.clientY - panLastY);
+      panLastX = e.clientX;
+      panLastY = e.clientY;
     }
   });
 
   mapStage.addEventListener('pointerup', () => {
+    if (panDragActive) {
+      panDragActive = false;
+      return;
+    }
     if (templateDrawStart) {
       const dist = Math.hypot(templateDrawPreviewEnd.x - templateDrawStart.x, templateDrawPreviewEnd.y - templateDrawStart.y);
       if (dist <= 8 && templateDeleteCandidate) {
