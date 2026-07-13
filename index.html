@@ -506,7 +506,7 @@
     padding: 0 2px 6px;
   }
   .repeat-header.actions-cols { grid-template-columns: 1.2fr 0.7fr 1.4fr 22px; }
-  .repeat-header.spells-cols { grid-template-columns: 0.5fr 1.2fr 0.5fr 1.2fr 22px; }
+  .repeat-header.spells-cols { grid-template-columns: 0.9fr 0.4fr 1.3fr 0.35fr 1fr 22px; }
   .repeat-row {
     display: grid;
     gap: 6px;
@@ -514,7 +514,7 @@
     padding: 4px 0;
   }
   .repeat-row.actions-cols { grid-template-columns: 1.2fr 0.7fr 1.4fr 22px; }
-  .repeat-row.spells-cols { grid-template-columns: 0.5fr 1.2fr 0.5fr 1.2fr 22px; }
+  .repeat-row.spells-cols { grid-template-columns: 0.9fr 0.4fr 1.3fr 0.35fr 1fr 22px; }
   .repeat-row input[type="text"], .repeat-row input[type="number"] {
     background: var(--ink);
     border: 1px solid var(--line);
@@ -1637,6 +1637,9 @@ body.vs-hide-map .map-wrap { display: none; }
 .tracker-wrap, .dm-reference-wrap, .map-wrap { margin-top: 14px; }
 .mode-switch-wrap { display: none; } /* mode switch now lives in the nav bar */
 
+
+.spell-class-header { color: #c9a84c; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; margin: 10px 0 4px; padding-bottom: 2px; border-bottom: 1px solid #3d382c; }
+.spell-cls { background: #14120e; border: 1px solid #3d382c; color: #d8cdb4; border-radius: 6px; padding: 4px 4px; font-family: inherit; font-size: 0.78rem; min-width: 0; }
 </style>
 </head>
 <body>
@@ -1788,7 +1791,7 @@ body.vs-hide-map .map-wrap { display: none; }
             Hide unprepared
           </label>
         </div>
-        <div class="repeat-header spells-cols"><span>Lvl</span><span>Name</span><span>Prep</span><span>Notes</span><span></span></div>
+        <div class="repeat-header spells-cols"><span>Class</span><span>Lvl</span><span>Name</span><span>Prep</span><span>Notes</span><span></span></div>
         <div id="spellsList"></div>
         <button class="io-btn add-item-btn" id="addSpellBtn">+ Add Spell</button>
       </div>
@@ -2733,35 +2736,56 @@ body.vs-hide-map .map-wrap { display: none; }
 
   let hideUnprepared = false;
 
+  // Spells are grouped by their class/source. Shared spells live in one
+  // entry under whichever class they were learned from.
+  const SPELL_CLASSES = ['', 'Artificer', 'Bard', 'Cleric', 'Druid', 'Paladin', 'Ranger', 'Sorcerer', 'Warlock', 'Wizard', 'Eldritch Knight', 'Arcane Trickster', 'Feat', 'Racial', 'Item', 'Other'];
   function renderSpells() {
     spellsListEl.innerHTML = '';
     const visible = hideUnprepared ? spellsData.filter(s => s.prepared) : spellsData;
     if (hideUnprepared && spellsData.length && !visible.length) {
       const empty = document.createElement('div');
       empty.className = 'chat-empty';
-      empty.textContent = 'No prepared spells yet — check a spell\u2019s Prep box, or turn off "Hide unprepared" to see the full list.';
+      empty.textContent = 'No prepared spells yet \u2014 check a spell\u2019s Prep box, or turn off "Hide unprepared" to see the full list.';
       spellsListEl.appendChild(empty);
     }
+    const groups = new Map();
     visible.forEach(s => {
-      const row = document.createElement('div');
-      row.className = 'repeat-row spells-cols';
-      row.dataset.id = s.id;
-      row.innerHTML = `
+      const k = s.cls || '';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    });
+    const rank = k => { const i = SPELL_CLASSES.indexOf(k); return i === -1 ? 97 : (i === 0 ? 98 : i); }; // unassigned sinks to the bottom
+    const keys = [...groups.keys()].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    keys.forEach(k => {
+      if (groups.size > 1 || k) {
+        const h = document.createElement('div');
+        h.className = 'spell-class-header';
+        h.textContent = k || 'Unassigned';
+        spellsListEl.appendChild(h);
+      }
+      groups.get(k).slice().sort((a, b) => a.level - b.level || a.name.localeCompare(b.name)).forEach(s => {
+        const row = document.createElement('div');
+        row.className = 'repeat-row spells-cols';
+        row.dataset.id = s.id;
+        row.innerHTML = `
+        <select class="spell-cls" title="Class / source">${SPELL_CLASSES.map(c => `<option value="${c}" ${(s.cls || '') === c ? 'selected' : ''}>${c || '\u2014'}</option>`).join('')}</select>
         <input type="number" class="spell-level" value="${s.level}" min="0" max="9">
         <input type="text" class="spell-name" value="${escapeAttr(s.name)}" placeholder="Spell name">
         <input type="checkbox" class="spell-prepared" ${s.prepared ? 'checked' : ''} title="Prepared">
         <input type="text" class="spell-notes" value="${escapeAttr(s.notes)}" placeholder="Notes">
-        <button class="remove-item-btn" title="Remove">×</button>
+        <button class="remove-item-btn" title="Remove">\u00d7</button>
       `;
-      spellsListEl.appendChild(row);
+        spellsListEl.appendChild(row);
+      });
     });
   }
+
   document.getElementById('hideUnpreparedCheckbox').addEventListener('change', e => {
     hideUnprepared = e.target.checked;
     renderSpells();
   });
   document.getElementById('addSpellBtn').addEventListener('click', () => {
-    spellsData.push({ id: ++spellsIdCounter, level: 0, name: '', prepared: false, notes: '' });
+    spellsData.push({ id: ++spellsIdCounter, level: 0, name: '', prepared: false, notes: '', cls: '' });
     renderSpells();
     queueSave();
     const rows = spellsListEl.querySelectorAll('.repeat-row');
@@ -2780,6 +2804,7 @@ body.vs-hide-map .map-wrap { display: none; }
       if (hideUnprepared) renderSpells(); // keep the filtered list in sync immediately, not just on the next full render
     }
     if (e.target.classList.contains('spell-notes')) s.notes = e.target.value;
+    if (e.target.classList.contains('spell-cls')) { s.cls = e.target.value; renderSpells(); }
     queueSave();
   });
   spellsListEl.addEventListener('click', e => {
@@ -2868,7 +2893,7 @@ body.vs-hide-map .map-wrap { display: none; }
       otherProficiencies: document.getElementById('otherProficiencies').value,
       actions: actionsData.map(a => ({ name: a.name, atk: a.atk, dmg: a.dmg })),
       spellAbility: spellAbilitySelect.value,
-      spells: spellsData.map(s => ({ level: s.level, name: s.name, prepared: s.prepared, notes: s.notes })),
+      spells: spellsData.map(s => ({ level: s.level, name: s.name, prepared: s.prepared, notes: s.notes, cls: s.cls || '' })),
       features: featuresData.map(f => ({ name: f.name, description: f.description })),
       alignment: document.getElementById('alignmentInput').value,
       personalityTraits: document.getElementById('personalityTraits').value,
@@ -2943,7 +2968,7 @@ body.vs-hide-map .map-wrap { display: none; }
 
     spellAbilitySelect.value = data.spellAbility || '';
     spellsData = Array.isArray(data.spells) ? data.spells.map(s => ({
-      id: ++spellsIdCounter, level: s.level ?? 0, name: s.name || '', prepared: !!s.prepared, notes: s.notes || ''
+      id: ++spellsIdCounter, level: s.level ?? 0, name: s.name || '', prepared: !!s.prepared, notes: s.notes || '', cls: s.cls || ''
     })) : [];
     renderSpells();
 
@@ -7242,15 +7267,27 @@ body.vs-hide-map .map-wrap { display: none; }
       });
     });
 
-    // Spells
+    // Spells — tagged with their source class, deduped by name
     const spells = [];
-    const pushSpell = s => {
+    const seenSpells = new Set();
+    const classNameById = {};
+    classes.forEach(c => { if (c.id != null) classNameById[c.id] = (c.definition && c.definition.name) || 'Class'; });
+    const pushSpell = (s, cls) => {
       const def = s.definition || {};
-      spells.push({ level: def.level ?? 0, name: def.name || 'Spell', prepared: !!s.prepared || !!s.alwaysPrepared, notes: def.school || '' });
+      if (!def.name) return; // some granted entries carry only IDs, no definition
+      const key = def.name.toLowerCase();
+      if (seenSpells.has(key)) return; // shared spells get one entry only
+      seenSpells.add(key);
+      spells.push({ level: def.level ?? 0, name: def.name, prepared: !!s.prepared || !!s.alwaysPrepared || (def.level ?? 0) === 0, notes: def.school || '', cls: cls || '' });
     };
-    (d.classSpells || []).forEach(cs => (cs.spells || []).forEach(pushSpell));
+    (d.classSpells || []).forEach(cs => {
+      const cls = classNameById[cs.characterClassId] || (classes[0] && classes[0].definition && classes[0].definition.name) || '';
+      (cs.spells || []).forEach(s => pushSpell(s, cls));
+    });
     const extraSpells = d.spells || {};
-    Object.keys(extraSpells).forEach(k => (Array.isArray(extraSpells[k]) ? extraSpells[k] : []).forEach(pushSpell));
+    const bucketCls = { race: 'Racial', feat: 'Feat', item: 'Item', background: 'Other', class: (classes[0] && classes[0].definition && classes[0].definition.name) || 'Other' };
+    Object.keys(extraSpells).forEach(k =>
+      (Array.isArray(extraSpells[k]) ? extraSpells[k] : []).forEach(s => pushSpell(s, bucketCls[k] || 'Other')));
     spells.sort((a, b) => a.level - b.level || a.name.localeCompare(b.name));
     let spellAbility = '';
     for (const c of classes) {
