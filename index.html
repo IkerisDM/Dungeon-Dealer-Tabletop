@@ -3699,6 +3699,10 @@ body.vs-hide-map .map-wrap { display: none; }
   }
 
   function leaveRoom() {
+    if (board.dmSeat && board.dmSeat.playerId === myPlayerId) {
+      board.dmSeat = null;
+      pushBoardToRoom(board).catch(() => {}); // free the seat before we disconnect
+    }
     currentRoom = null;
     if (roomUnsubscribeBoard) { roomUnsubscribeBoard(); roomUnsubscribeBoard = null; }
     if (roomUnsubscribeChat) { roomUnsubscribeChat(); roomUnsubscribeChat = null; }
@@ -5840,8 +5844,41 @@ body.vs-hide-map .map-wrap { display: none; }
     renderTokens(); // token drag/edit permissions depend on the current mode
   }
 
+  // ---- DM SEAT (one DM per room) ----
+  // Solo (no room joined): switch freely, exactly as before. In a room the
+  // DM role is a claimable seat synced on the board: first to take it holds
+  // it, everyone else is limited to Player until it's released. Taking an
+  // abandoned seat is allowed (with a confirm) — the previous holder is
+  // demoted automatically on their next sync.
+  function vsDmSeat() { return (currentRoom && board.dmSeat && board.dmSeat.playerId) ? board.dmSeat : null; }
+  function vsSeatIsMine() { const s = vsDmSeat(); return !!s && s.playerId === myPlayerId; }
+
+  function vsClaimDmSeat() {
+    board.dmSeat = { playerId: myPlayerId, name: currentPlayerName(), ts: Date.now() };
+    syncBoard();
+    addCombatLogEntry('👑 ' + currentPlayerName() + ' has taken the DM seat.', 'turn');
+  }
+  function vsReleaseDmSeat() {
+    if (vsSeatIsMine()) {
+      board.dmSeat = null;
+      syncBoard();
+      addCombatLogEntry('👑 The DM seat is now open.', 'note');
+    }
+  }
+
   modeSwitchBtn.addEventListener('click', () => {
-    viewRole = viewRole === 'dm' ? 'player' : 'dm';
+    const wantDm = viewRole !== 'dm';
+    if (wantDm && currentRoom) {
+      const seat = vsDmSeat();
+      if (seat && seat.playerId !== myPlayerId) {
+        if (!window.confirm('The DM seat is held by ' + (seat.name || 'another player') + '. Take it anyway?\n\n(Only do this if the DM left — they will be switched to Player.)')) {
+          return;
+        }
+      }
+      vsClaimDmSeat();
+    }
+    if (!wantDm) vsReleaseDmSeat(); // stepping down opens the seat
+    viewRole = wantDm ? 'dm' : 'player';
     applyInterfaceMode();
     window.storage.set(VIEW_ROLE_KEY, viewRole, false).catch(() => {});
   });
@@ -6686,6 +6723,28 @@ body.vs-hide-map .map-wrap { display: none; }
   applyBoardState = function (newBoard) {
     vsPrevApplyBoardState(newBoard);
     try { renderVsCoins(); } catch (err) { /* panel not ready yet */ }
+    // DM-seat enforcement: if someone else holds the seat while I'm in DM
+    // mode, step down to Player automatically (self-heals seat takeovers).
+    try {
+      if (currentRoom && viewRole === 'dm' && board.dmSeat && board.dmSeat.playerId && board.dmSeat.playerId !== myPlayerId) {
+        viewRole = 'player';
+        applyInterfaceMode();
+        window.storage.set(VIEW_ROLE_KEY, viewRole, false).catch(() => {});
+        addCombatLogEntry('👑 ' + (board.dmSeat.name || 'Another player') + ' holds the DM seat — you are now in Player mode.', 'note');
+      }
+      // If I'm the DM in this room and the seat is unclaimed, claim it so
+      // the room knows the seat is occupied (e.g. right after joining).
+      if (currentRoom && viewRole === 'dm' && (!board.dmSeat || !board.dmSeat.playerId)) {
+        board.dmSeat = { playerId: myPlayerId, name: currentPlayerName(), ts: Date.now() };
+        syncBoard();
+      }
+      // Show the seat holder on the mode button for everyone else
+      if (currentRoom && board.dmSeat && board.dmSeat.playerId && board.dmSeat.playerId !== myPlayerId) {
+        modeSwitchBtn.title = 'DM seat held by ' + (board.dmSeat.name || 'another player');
+      } else {
+        modeSwitchBtn.title = 'Local to your device only — everyone at the table picks their own';
+      }
+    } catch (err) { /* seat enforcement is best-effort */ }
   };
 
   renderVsAdventure();
