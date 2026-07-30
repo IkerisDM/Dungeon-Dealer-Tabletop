@@ -114,7 +114,7 @@
     min-height: 80px;
     transition: transform 0.15s ease;
   }
-  .result.rolling { animation: shake 0.35s ease; }
+  .result.rolling { animation: shake 0.6s ease; }
   @keyframes shake {
     0%, 100% { transform: translateY(0); }
     25% { transform: translateY(-4px) rotate(-2deg); }
@@ -122,6 +122,49 @@
   }
   .result.crit-max { color: var(--gold); text-shadow: 0 0 18px rgba(201,168,76,0.5); }
   .result.crit-min { color: var(--blood); }
+
+  /* ---------- DICE ANIMATION ---------- */
+  .dice-anim-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    margin-bottom: 4px;
+  }
+  .die-face {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    background: var(--ink);
+    border: 2px solid var(--gold);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Courier New', monospace;
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: var(--bone);
+  }
+  .die-face.dropped { border-color: var(--line); color: var(--bone-dim); opacity: 0.6; }
+  .die-face.spinning { animation: diceTumble 0.6s ease-out; }
+  @keyframes diceTumble {
+    0%   { transform: rotate(0deg) scale(1); }
+    20%  { transform: rotate(150deg) scale(1.1); }
+    45%  { transform: rotate(270deg) scale(0.9); }
+    70%  { transform: rotate(400deg) scale(1.06); }
+    100% { transform: rotate(360deg) scale(1); }
+  }
+  .die-face.pip-face {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(3, 1fr);
+    padding: 6px;
+  }
+  .die-face.pip-face .pip { border-radius: 50%; }
+  .die-face.pip-face .pip.on { background: var(--bone); margin: auto; width: 6px; height: 6px; }
+  .die-face.dropped.pip-face .pip.on { background: var(--bone-dim); }
 
   .breakdown {
     font-size: 0.85rem;
@@ -1902,6 +1945,7 @@ body.vs-hide-map .map-wrap { display: none; }
         </div>
 
         <div class="dice-tray-body" id="diceTrayBody">
+          <div class="dice-anim-row" id="diceAnimRow"></div>
           <div class="result" id="result">—</div>
           <div class="breakdown" id="breakdown"></div>
 
@@ -3371,6 +3415,34 @@ body.vs-hide-map .map-wrap { display: none; }
     return Math.floor(Math.random() * sides) + 1;
   }
 
+  // ---------- DICE FACE ANIMATION ----------
+  // Standard 1-6 pip layout on a 3x3 grid, numbered left-to-right/top-to-bottom.
+  const PIP_LAYOUTS = {
+    1: [4],
+    2: [0, 8],
+    3: [0, 4, 8],
+    4: [0, 2, 6, 8],
+    5: [0, 2, 4, 6, 8],
+    6: [0, 2, 3, 5, 6, 8]
+  };
+  function renderDieFace(el, sides, value) {
+    el.innerHTML = '';
+    if (sides === 6) {
+      el.classList.add('pip-face');
+      const onPositions = PIP_LAYOUTS[value] || [];
+      for (let i = 0; i < 9; i++) {
+        const pip = document.createElement('span');
+        pip.className = 'pip' + (onPositions.includes(i) ? ' on' : '');
+        el.appendChild(pip);
+      }
+    } else {
+      el.classList.remove('pip-face');
+      el.textContent = value;
+    }
+  }
+  const diceAnimRow = document.getElementById('diceAnimRow');
+  const DICE_SPIN_MS = 600;
+
   function performRoll() {
     const count = Math.max(1, Math.min(20, parseInt(countInput.value) || 1));
     const modifier = parseInt(modInput.value) || 0;
@@ -3407,7 +3479,34 @@ body.vs-hide-map .map-wrap { display: none; }
     resultEl.classList.remove('crit-max', 'crit-min');
     resultEl.classList.add('rolling');
 
+    // Build one animated face per die (advantage/disadvantage shows both the
+    // kept and dropped d20, since that's the whole point of the mechanic).
+    const facesData = useAdvMode
+      ? [{ sides: 20, value: keptRoll, dropped: false }, { sides: 20, value: droppedRoll, dropped: true }]
+      : rolls.map(r => ({ sides: selectedDie, value: r, dropped: false }));
+
+    diceAnimRow.innerHTML = '';
+    const faceEls = facesData.map(fd => {
+      const el = document.createElement('div');
+      el.className = 'die-face spinning' + (fd.dropped ? ' dropped' : '');
+      renderDieFace(el, fd.sides, rollOneDie(fd.sides));
+      diceAnimRow.appendChild(el);
+      return el;
+    });
+
+    // While the dice "tumble", cycle each face through random values like a
+    // slot machine, then land on the real result when the spin ends.
+    const spinInterval = setInterval(() => {
+      faceEls.forEach((el, i) => renderDieFace(el, facesData[i].sides, rollOneDie(facesData[i].sides)));
+    }, 80);
+
     setTimeout(() => {
+      clearInterval(spinInterval);
+      faceEls.forEach((el, i) => {
+        el.classList.remove('spinning');
+        renderDieFace(el, facesData[i].sides, facesData[i].value);
+      });
+
       resultEl.classList.remove('rolling');
       resultEl.textContent = total;
 
@@ -3432,7 +3531,7 @@ body.vs-hide-map .map-wrap { display: none; }
       breakdownEl.textContent = breakdownText;
 
       addToHistory(breakdownText, total, rolls, selectedDie, count);
-    }, 300);
+    }, DICE_SPIN_MS);
   }
 
   // ---------- HISTORY ----------
