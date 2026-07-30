@@ -88,10 +88,12 @@
     background: var(--ink-raised);
     border: 1px solid var(--line);
     border-radius: 6px;
-    padding: 32px 28px;
+    padding: 14px 16px;
     text-align: center;
     position: relative;
+    transition: padding 0.15s ease;
   }
+  .stage.tray-expanded { padding: 32px 28px; }
   .stage::before, .stage::after {
     content: '';
     position: absolute;
@@ -301,7 +303,42 @@
     color: var(--gold);
     user-select: none;
   }
-  .stage .sheet-drag-handle { margin: -32px -28px 18px; } /* .stage has different padding than .sheet */
+  .stage .sheet-drag-handle { margin: -14px -16px 10px; } /* .stage has different padding than .sheet */
+  .stage.tray-expanded .sheet-drag-handle { margin: -32px -28px 18px; }
+
+  /* ---------- DICE TRAY (collapsed-by-default dice roller) ---------- */
+  .dice-tray-bar { display: flex; align-items: center; gap: 6px; }
+  .dice-tray-bar .die-grid {
+    display: flex;
+    flex: 1;
+    gap: 6px;
+    margin-bottom: 0;
+  }
+  .dice-tray-bar .die-btn { flex: 1; padding: 8px 0; font-size: 0.72rem; }
+  .stage.tray-expanded .dice-tray-bar .die-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .stage.tray-expanded .dice-tray-bar .die-btn { padding: 10px 0; font-size: 0.95rem; }
+
+  .tray-toggle-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--bone-dim);
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 8px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .tray-toggle-btn:hover { border-color: var(--gold); color: var(--gold); }
+  .stage.tray-expanded .tray-toggle-btn { color: var(--gold); border-color: var(--gold); }
+
+  .dice-tray-body { display: none; margin-top: 18px; }
+  .stage.tray-expanded .dice-tray-body { display: block; }
   .floating .sheet-drag-handle { display: flex; }
   .sheet-drag-handle:active { cursor: grabbing; }
   .sheet-drag-handle button {
@@ -1856,31 +1893,37 @@ body.vs-hide-map .map-wrap { display: none; }
           <span>⋮⋮ Dice Roller</span>
           <button type="button" id="diceFloatCloseBtn">×</button>
         </div>
-        <div class="result" id="result">—</div>
-        <div class="breakdown" id="breakdown"></div>
 
-        <div class="die-grid" id="dieGrid">
-          <!-- die buttons injected by JS -->
-        </div>
-
-        <div class="controls">
-          <div class="count-control">
-            <label for="count">Qty</label>
-            <input type="number" id="count" value="1" min="1" max="20">
+        <div class="dice-tray-bar">
+          <div class="die-grid" id="dieGrid">
+            <!-- die buttons injected by JS -->
           </div>
-          <div class="mod-control">
-            <label for="modifier">Mod</label>
-            <input type="number" id="modifier" value="0">
+          <button type="button" class="tray-toggle-btn" id="diceTrayToggleBtn" title="Show full roller controls">▾</button>
+        </div>
+
+        <div class="dice-tray-body" id="diceTrayBody">
+          <div class="result" id="result">—</div>
+          <div class="breakdown" id="breakdown"></div>
+
+          <div class="controls">
+            <div class="count-control">
+              <label for="count">Qty</label>
+              <input type="number" id="count" value="1" min="1" max="20">
+            </div>
+            <div class="mod-control">
+              <label for="modifier">Mod</label>
+              <input type="number" id="modifier" value="0">
+            </div>
           </div>
-        </div>
 
-        <div class="adv-grid" id="advGrid">
-          <button class="adv-btn active" data-mode="normal">Normal</button>
-          <button class="adv-btn" data-mode="advantage">Advantage</button>
-          <button class="adv-btn" data-mode="disadvantage">Disadvantage</button>
-        </div>
+          <div class="adv-grid" id="advGrid">
+            <button class="adv-btn active" data-mode="normal">Normal</button>
+            <button class="adv-btn" data-mode="advantage">Advantage</button>
+            <button class="adv-btn" data-mode="disadvantage">Disadvantage</button>
+          </div>
 
-        <button class="roll-btn" id="rollBtn">Roll</button>
+          <button class="roll-btn" id="rollBtn">Roll</button>
+        </div>
       </div>
 
       <div class="room-panel">
@@ -2255,6 +2298,19 @@ body.vs-hide-map .map-wrap { display: none; }
     });
   });
 
+  // ---------- DICE TRAY (collapsed by default, expands to the full roller) ----------
+  const diceStageEl = document.getElementById('dicePanel');
+  const diceTrayToggleBtn = document.getElementById('diceTrayToggleBtn');
+
+  function setDiceTrayExpanded(expanded) {
+    diceStageEl.classList.toggle('tray-expanded', expanded);
+    diceTrayToggleBtn.textContent = expanded ? '▴' : '▾';
+    diceTrayToggleBtn.title = expanded ? 'Collapse to dice tray' : 'Show full roller controls';
+  }
+  diceTrayToggleBtn.addEventListener('click', () => {
+    setDiceTrayExpanded(!diceStageEl.classList.contains('tray-expanded'));
+  });
+
   // ---------- BUILD DIE BUTTONS ----------
   const dieSizes = [4, 6, 8, 10, 12, 20, 100];
   const dieGrid = document.getElementById('dieGrid');
@@ -2269,6 +2325,13 @@ body.vs-hide-map .map-wrap { display: none; }
       // Remove 'active' from every button, then add it to the one just clicked
       document.querySelectorAll('.die-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
+      // Tapping a die while the tray is collapsed is a "quick roll": pick
+      // it, expand to reveal the result, and roll immediately — same as
+      // clicking a die then Roll, in one motion.
+      if (!diceStageEl.classList.contains('tray-expanded')) {
+        setDiceTrayExpanded(true);
+        performRoll();
+      }
     });
     dieGrid.appendChild(btn);
   });
@@ -2435,6 +2498,7 @@ body.vs-hide-map .map-wrap { display: none; }
     }
 
     modInput.value = totalMod;
+    setDiceTrayExpanded(true);
     performRoll();
   });
 
@@ -2699,6 +2763,7 @@ body.vs-hide-map .map-wrap { display: none; }
       countInput.value = dice.count;
       modInput.value = dice.mod;
     }
+    setDiceTrayExpanded(true);
     performRoll();
   });
 
