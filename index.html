@@ -1941,6 +1941,7 @@ body.vs-hide-map .map-wrap { display: none; }
           <div class="die-grid" id="dieGrid">
             <!-- die buttons injected by JS -->
           </div>
+          <button type="button" class="tray-toggle-btn" id="diceSoundToggleBtn" title="Mute dice sound effects">🔊</button>
           <button type="button" class="tray-toggle-btn" id="diceTrayToggleBtn" title="Show full roller controls">▾</button>
         </div>
 
@@ -2354,6 +2355,83 @@ body.vs-hide-map .map-wrap { display: none; }
   diceTrayToggleBtn.addEventListener('click', () => {
     setDiceTrayExpanded(!diceStageEl.classList.contains('tray-expanded'));
   });
+
+  // ---------- DICE SOUND EFFECTS ----------
+  // Synthesized with the Web Audio API (no audio files to ship) — a handful
+  // of filtered-noise "clacks" during the tumble, then a lower-pitched thud
+  // when the dice settle.
+  const diceSoundToggleBtn = document.getElementById('diceSoundToggleBtn');
+  let soundEnabled = true;
+  try { soundEnabled = localStorage.getItem('ddtDiceSoundEnabled') !== 'false'; } catch (err) { /* private mode */ }
+
+  function setDiceSoundEnabled(enabled) {
+    soundEnabled = enabled;
+    diceSoundToggleBtn.textContent = enabled ? '🔊' : '🔇';
+    diceSoundToggleBtn.title = enabled ? 'Mute dice sound effects' : 'Unmute dice sound effects';
+    try { localStorage.setItem('ddtDiceSoundEnabled', String(enabled)); } catch (err) { /* private mode */ }
+  }
+  diceSoundToggleBtn.addEventListener('click', () => setDiceSoundEnabled(!soundEnabled));
+  setDiceSoundEnabled(soundEnabled); // paint the initial icon/title from the saved preference
+
+  let audioCtx = null;
+  function getAudioCtx() {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    return audioCtx;
+  }
+
+  // One shared noise buffer, reused for every clack/thud instead of
+  // generating fresh random samples on every roll.
+  let diceNoiseBuffer = null;
+  function getDiceNoiseBuffer(ctx) {
+    if (diceNoiseBuffer) return diceNoiseBuffer;
+    const length = Math.floor(ctx.sampleRate * 0.3);
+    diceNoiseBuffer = ctx.createBuffer(1, length, ctx.sampleRate);
+    const data = diceNoiseBuffer.getChannelData(0);
+    for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
+    return diceNoiseBuffer;
+  }
+
+  // A single percussive hit: noise through a bandpass filter with a fast
+  // exponential decay, like a die knocking against the table.
+  function playDiceHit(ctx, atTime, freq, peakGain, decaySec) {
+    const source = ctx.createBufferSource();
+    source.buffer = getDiceNoiseBuffer(ctx);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'bandpass';
+    filter.frequency.value = freq;
+    filter.Q.value = 1.2;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.setValueAtTime(peakGain, atTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.001, atTime + decaySec);
+
+    source.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    source.start(atTime);
+    source.stop(atTime + decaySec + 0.02);
+  }
+
+  // Schedules a little clatter across the tumble animation, then a final,
+  // lower-pitched thud right as the dice settle on their faces.
+  function playRollSound(numDice, spinMs) {
+    if (!soundEnabled) return;
+    const ctx = getAudioCtx();
+    const now = ctx.currentTime;
+    const spinSec = spinMs / 1000;
+
+    const hitCount = Math.min(10, 3 + numDice);
+    for (let i = 0; i < hitCount; i++) {
+      const t = now + (i / hitCount) * spinSec * 0.85 + Math.random() * 0.02;
+      const freq = 900 + Math.random() * 1400;
+      playDiceHit(ctx, t, freq, 0.18, 0.06);
+    }
+
+    playDiceHit(ctx, now + spinSec, 220 + Math.random() * 60, 0.35, 0.18);
+  }
 
   // ---------- BUILD DIE BUTTONS ----------
   const dieSizes = [4, 6, 8, 10, 12, 20, 100];
@@ -3493,6 +3571,8 @@ body.vs-hide-map .map-wrap { display: none; }
       diceAnimRow.appendChild(el);
       return el;
     });
+
+    playRollSound(faceEls.length, DICE_SPIN_MS);
 
     // While the dice "tumble", cycle each face through random values like a
     // slot machine, then land on the real result when the spin ends.
